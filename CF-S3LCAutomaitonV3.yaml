@@ -89,91 +89,83 @@ Resources:
           schemaVersion: '0.3'
           assumeRole: !GetAtt AWSSSMRole.Arn
           parameters:
-            Mode:
+            Role:
+              default: !GetAtt AWSSSMRole.Arn
               type: String
-              description: Choose to Add a LC Policy or Update all LC polices based upon Governance Configuraiton File
+            GovRuleDoc:
+              allowedValues:
+                - lc-config/goverance_rulesv1.json
+              default: lc-config/goverance_rulesv1.json
+              type: String
+            S3LCCfgDoc:
+              allowedValues:
+                - lc-config/LifeCycleIndex.json
+              default: lc-config/LifeCycleIndex.json
+              type: String
+            GovCfgDoc:
+              allowedValues:
+                - lc-config/goverance_config.json
+              default: lc-config/goverance_config.json
+              type: String
+            DocumentBucket:
+              default: !Ref Bucket
+              description: Location where LifeCycle Configuraiton Goverance documents are stored
+              type: String
+              allowedPattern: '^[a-z0-9-_.]+$'
+            Mode:
               allowedValues:
                 - Add
                 - Update
                 - Initialize
-            DocumentBucket:
+              description: Choose to Add a LC Policy or Update all LC polices based upon Governance Configuraiton File
               type: String
-              default: !Ref Bucket
-              description: Location where LifeCycle Configuraiton Goverance documents are stored
-              allowedPattern: '^[a-z0-9-_.]+$'
-            GovRuleDoc:
-              type: String
-              default: lc-config/goverance_rulesv1.json
-              allowedValues:
-                - lc-config/goverance_rulesv1.json
-            GovCfgDoc:
-              type: String
-              default: lc-config/goverance_config.json
-              allowedValues:
-                - lc-config/goverance_config.json
-            S3LCCfgDoc:
-              type: String
-              default: lc-config/LifeCycleIndex.json
-              allowedValues:
-                - lc-config/LifeCycleIndex.json
-            Region:
-              type: String
-              default: us-east-1
-              allowedValues:
-                - us-east-1
-                - us-east-2
-                - us-west-1
-                - us-west-2
-                - eu-central-1
-                - eu-west-1
-                - eu-west-2
             Bucket:
-              type: String
               default: ''
+              type: String
               allowedPattern: '^[a-z0-9-_.]+$'
             GoveranceRule:
-              type: String
-              description: Goverance rule for the new configuration
-              default: Type1
               allowedValues:
                 - Type1
                 - Type2
                 - Type3
-            Role:
+              default: Type1
+              description: Goverance rule for the new configuration
               type: String
-              default: !GetAtt AWSSSMRole.Arn
-            Prefix:
-              type: String
-              default: lc-prefix/
-              allowedPattern: '^[a-z0-9-_./:]+$'
-            lcName:
-              type: String
-              default: lc-1
-              allowedPattern: '[a-z0-9-_]{1,17}$'
             preAge:
-              type: String
               default: '10'
-              allowedPattern: '^[0-9]+$'
               description: Age of data set before it was placed in S3.
+              type: String
+              allowedPattern: '^[0-9]+$'
+            lcName:
+              default: lc-1
+              type: String
+              allowedPattern: '[a-z0-9-_]{1,17}$'
+            Prefix:
+              default: lc-prefix/
+              type: String
+              allowedPattern: '^[a-z0-9-_./:]+$'
           mainSteps:
-            - name: modeCheck
-              action: 'aws:branch'
-              inputs:
+            - inputs:
                 Choices:
-                  - NextStep: cmpRegion
+                  - StringEquals: Add
                     Variable: '{{Mode}}'
-                    StringEquals: Add
-                  - NextStep: updateMode
+                    NextStep: cmpRegion
+                  - StringEquals: Update
                     Variable: '{{Mode}}'
-                    StringEquals: Update
-                  - NextStep: initializeFiles
+                    NextStep: updateMode
+                  - StringEquals: Initialize
                     Variable: '{{Mode}}'
-                    StringEquals: Initialize
-            - name: cmpRegion
-              action: 'aws:executeScript'
+                    NextStep: initializeFiles
+              name: modeCheck
+              action: 'aws:branch'
+            - outputs:
+                - Type: String
+                  Name: status
+                  Selector: $.Payload.status
+                - Name: Region
+                  Selector: $.Payload.region
+                  Type: String
               inputs:
-                Runtime: python3.8
-                Handler: script_handler
                 Script: |-
                   import json
                   import boto3
@@ -182,7 +174,6 @@ Resources:
                   def script_handler(events, context):
                       client = boto3.client('s3')
                       Bucket = events["Bucket"]
-                      Region = events["Region"]
                       try:
                           response = client.get_bucket_location(
                                       Bucket=Bucket
@@ -195,43 +186,22 @@ Resources:
                           foundRegion = "us-east-1"
                       else:
                           foundRegion = response["LocationConstraint"]
-                      if foundRegion == Region:
-                          return {"status": "pass"}
-                      else:
-                          return {"status": "Error.RegionMismatch"}
+                      return {"status": "pass","region": foundRegion}
+                Runtime: python3.8
                 InputPayload:
                   Bucket: '{{Bucket}}'
-                  Region: '{{Region}}'
-              outputs:
-                - Name: status
-                  Selector: $.Payload.status
-                  Type: String
-            - name: regionCheck
-              action: 'aws:branch'
-              inputs:
-                Choices:
-                  - NextStep: PullLCData
-                    Variable: '{{cmpRegion.status}}'
-                    StringEquals: pass
-                  - NextStep: failure
-                    Variable: '{{cmpRegion.status}}'
-                    StartsWith: Error
-                Default: failure
+                Handler: script_handler
+              name: cmpRegion
+              action: 'aws:executeScript'
             - name: PullLCData
               action: 'aws:executeScript'
               inputs:
-                Runtime: python3.6
+                Runtime: python3.7
                 Handler: script_handler
                 Script: |-
                   import json
                   import boto3
                   from botocore.exceptions import ClientError
-
-                  events = {
-                    "Bucket": "4738-bucket-fsxl",
-                    "lcName": "test2",
-                    "Prefix": "te"
-                  }
 
                   def script_handler(events, context):
                       bucket = events["Bucket"]
@@ -258,8 +228,8 @@ Resources:
                                       return {"status": "error.ExistPrefix", "LC": response["Rules"]}
                       return {"status": "add", "LC": response["Rules"]}
                 InputPayload:
-                  Bucket: '{{Bucket}}'
                   lcName: '{{lcName}}'
+                  Bucket: '{{Bucket}}'
                   Prefix: '{{Prefix}}'
               outputs:
                 - Name: status
@@ -268,176 +238,68 @@ Resources:
                 - Name: rules
                   Selector: $.Payload.LC
                   Type: MapList
-            - name: GetGovRuleData
-              action: 'aws:executeScript'
-              inputs:
-                Runtime: python3.8
-                Handler: script_handler
-                Script: "import json\nimport boto3\n\ndef script_handler(events, context):\n\tdef OpenJsonFile(bucket,file):\n\t    # Opening JSON file\n\t    \n\t    #print(Bucket,Key,value)\n\t    s3 = boto3.client('s3')\n\t    response = s3.get_object(Bucket = bucket, Key = file)\n\t    content = response['Body']\n\t    data = json.loads(content.read().decode('utf-8'))\n\t    #try:\n\t    #    f = open(file)\n\t    #except:\n\t    #    print(\"Could not open file:\",file)\n\t    #    exit()\n\t    #    return False\n\t    # returns JSON object as \n\t    #f.close()\n\t    # a dictionary\n\t    #with open(file, 'r') as f:\n\t    #    data = json.load(f)\n\t    # Closing file\n\t    #f.close()\n\t    return data\n\tdef CheckMode(new_region,new_type,data):\n\n\t\t#print(data)\n\t\tfor x in data[\"regions\"]:\n\t\t\t#print(x)\n\t\t\tfor y in x.keys():\n\t\t\t\tif new_region in x[y][\"awsRegions\"]:\n\t\t\t\t\t#print(x[y][\"awsRegions\"])\n\t\t\t\t\t#print(f\"{new_region} is in {y}\")\n\t\t\t\t\tif new_type in x[y][\"Types\"]:\n\t\t\t\t\t\t#print(z[new_type])\n\t\t\t\t\t\treturn True\n\t\treturn False\n\n\tdef CheckRegion(new_region,new_bucket,new_type,data):\n\n\t\tif new_region in data:\n\t\t\tfor g in data[new_region][\"buckets\"]:\n\t\t\t\tif new_bucket in g.keys():\n\t\t\t\t\tif new_type == g[new_bucket][\"type\"]:\n\t\t\t\t\t\t#print(g[new_bucket])\n\t\t\t\t\t\treturn 0\n\t\t\t\t\telse:\n\t\t\t\t\t\treturn \"fail\"\n\t\t\t\treturn 1\n\t\treturn 2\n\n\tdef CheckLC(new_bucket,new_prefix,new_name,retention,preAge,data):\n\t\tfor u in data[\"LC\"]:\n\t\t\tif new_bucket == u[\"bucket\"]:\n\t\t\t\tfor j in u[\"jobs\"]:\n\t\t\t\t\tif new_name == j[\"name\"] or new_prefix == j[\"prefix\"]:\n\t\t\t\t\t\treturn {\"status\": \"Error.LC\", \"item\":{}}\n\t\t\n\t\titem = {\"name\": new_name,\"description\":\"default\",\"prefix\": new_prefix,\"retention\": retention,\"preAge\": preAge,\"minFileSize\": 1}\n\t\treturn {\"status\": \"add\",\"item\": item}\n\n\n\t#new_region = \"us-east-1\"\n\tnew_region = events[\"Region\"]\n\t#new_type = \"Type2\"\n\tnew_type = events[\"GoveranceRule\"]\n\t#new_bucket = \"4186-lc-virginia1\"\n\tnew_bucket = events[\"Bucket\"]\n\tsourceBucket = events[\"DocumentBucket\"]\n\tGovRuleDoc = events[\"GovRuleDoc\"]\n\tGovCfgDoc = events[\"GovCfgDoc\"]\n\tS3LCCfgDoc = events[\"S3LCCfgDoc\"]\n\t#new_role = \"arn:aws:iam::967258374186:role/4186-s3-lc-assume-role\"\n\tnew_role = events[\"Role\"]\n\t#new_prefix = \"prefix/\"\n\tnew_prefix = events[\"Prefix\"]\n\tnew_name = events[\"lcName\"]\n\tpreAge = events[\"preAge\"]\n\tdataMode = OpenJsonFile(sourceBucket,GovRuleDoc)\n\tdataRegion = OpenJsonFile(sourceBucket,GovCfgDoc)\n\tdataLC = OpenJsonFile(sourceBucket,S3LCCfgDoc)\n\n\tif(CheckMode(new_region,new_type,dataMode)):\n\t\trtn = CheckRegion(new_region,new_bucket,new_type,dataRegion)\n\t\tif not rtn == \"fail\":\n\t\t\tretention = dataMode[\"types\"][new_type][\"minRetention\"]\n\t\t\tif rtn == 1:\n\t\t\t\t#print(f\"can add new bucket {new_bucket}\")\n\n\t\t\t\titem = {new_bucket: {\"IAMrole\": new_role,\"type\": new_type}}\n\t\t\t\trtn2 = CheckLC(new_bucket,new_prefix,new_name,retention,preAge,dataLC)\n\t\t\t\tif rtn2[\"status\"] == \"add\":\n\t\t\t\t\titem2 = rtn2[\"item\"]\n\t\t\t\t\treturn {\"status\": \"add\", \"type\": \"bucket\", \"govCfgAdd\": item, \"LCAdd\": item2}\n\t\t\t\telse:\n\t\t\t\t\treturn {\"status\": \"Error.LC\", \"type\": \"\", \"govCfgAdd\": {}, \"LCAdd\": {}}\n\t\t\t\t#dataRegion[new_region][\"buckets\"].append(item)\n\t\t\t\t#json_object = json.dumps(new_file, indent = 4) \n\t\t\telif rtn == 0:\n\t\t\t\trtn2 = CheckLC(new_bucket,new_prefix,new_name,retention,preAge,dataLC)\n\t\t\t\tif rtn2[\"status\"] == \"add\":\n\t\t\t\t\titem2 = rtn2[\"item\"]\n\t\t\t\t\treturn {\"status\": \"add\", \"type\": \"prefix\", \"govCfgAdd\": {}, \"LCAdd\": item2}\n\t\t\t\telse:\n\t\t\t\t\treturn {\"status\": \"Error.LC\", \"type\": \"\", \"govCfgAdd\": {}, \"LCAdd\": {}}\n\t\t\telif rtn == 2:\n\t\t\t\titem = { \"buckets\": [ {new_bucket: {\"IAMrole\": new_role,\"type\": new_type}}]}\n\t\t\t\trtn2 = CheckLC(new_bucket,new_prefix,new_name,retention,preAge,dataLC)\n\t\t\t\tif rtn2[\"status\"] == \"add\":\n\t\t\t\t\titem2 = rtn2[\"item\"]\n\t\t\t\t\treturn {\"status\": \"add\", \"type\": \"region\", \"govCfgAdd\": item, \"LCAdd\": item2}\n\t\t\t\telse:\n\t\t\t\t\treturn {\"status\": \"Error.LC\", \"type\": \"\", \"govCfgAdd\": {}, \"LCAdd\": {}}\n\t\telse:\n\t\t\treturn {\"status\": \"Error.Config\", \"type\": \"\", \"govCfgAdd\": {}, \"LCAdd\": {}}\n\treturn {\"status\": \"Error.Rule\", \"type\": \"\", \"govCfgAdd\": {}, \"LCAdd\": {}}"
-                InputPayload:
-                  DocumentBucket: '{{DocumentBucket}}'
-                  GoveranceRule: '{{GoveranceRule}}'
-                  Bucket: '{{Bucket}}'
-                  Region: '{{Region}}'
-                  Role: '{{Role}}'
-                  GovRuleDoc: '{{GovRuleDoc}}'
-                  GovCfgDoc: '{{GovCfgDoc}}'
-                  S3LCCfgDoc: '{{S3LCCfgDoc}}'
-                  Prefix: '{{Prefix}}'
-                  lcName: '{{lcName}}'
-                  preAge: '{{preAge}}'
-              outputs:
-                - Name: status
+            - outputs:
+                - Type: String
+                  Name: status
                   Selector: $.Payload.status
-                  Type: String
-                - Name: type
+                - Type: String
+                  Name: type
                   Selector: $.Payload.type
-                  Type: String
-                - Name: govCfgAdd
+                - Type: StringMap
+                  Name: govCfgAdd
                   Selector: $.Payload.govCfgAdd
-                  Type: StringMap
-                - Name: LCAdd
+                - Type: StringMap
+                  Name: LCAdd
                   Selector: $.Payload.LCAdd
-                  Type: StringMap
-            - name: statusCheck
-              action: 'aws:branch'
               inputs:
-                Choices:
-                  - NextStep: addRoleToBucketGetPolicy
-                    Variable: '{{GetGovRuleData.status}}'
-                    StringEquals: add
-                  - NextStep: failure
-                    Variable: '{{GetGovRuleData.status}}'
-                    StartsWith: Error
-            - name: addRoleToBucketGetPolicy
-              action: 'aws:executeAwsApi'
-              inputs:
-                Service: s3
-                Api: GetBucketPolicy
-                Bucket: '{{Bucket}}'
-              outputs:
-                - Name: policy
-                  Selector: $.Policy
-                  Type: String
-            - name: addRoleGenNewPolicy
-              action: 'aws:executeScript'
-              inputs:
-                Runtime: python3.7
-                Handler: script_handler
-                Script: |-
-                  import json
-                  import sys
-                  def script_handler(events, context):
-                    import json
-                    oldPolicy = events["policy"]
-                    role = events["Role"]
-                    region = events["Region"]
-                    bucket = events["Bucket"]
-                    lcName = events["lcName"]
-                    PolicyDict = json.loads(oldPolicy)
-                    skip = False
-                    #statementCount = str(len(oldPolicyDict["Statement"]))
-                    for state in PolicyDict["Statement"]:
-                      if isinstance(state["Principal"], dict):
-                        if "AWS" in state["Principal"].keys():
-                          if isinstance(state["Principal"]["AWS"], str):
-                            if state["Principal"]["AWS"] == role:
-                              #print("found role")
-                              skip = True
-                            elif isinstance(state["Principal"]["AWS"], list):
-                              for r in state["Principal"]["AWS"]:
-                                if r == role:
-                                  #print("found role")
-                                  skip = True
-                    if not skip:      
-                      bucket_arn = f"arn:aws:s3:::{bucket}"
-                      bucket_arnplus = bucket_arn + '/*'
-                      newStatement = {
-                                          "Sid": lcName,
-                                          "Effect": "Allow",
-                                          "Principal": {
-                                              "AWS": [
-                                                  role
-                                              ]
-                                          },
-                                          "Action": "s3:*",
-                                          "Resource": [
-                                              bucket_arn,
-                                              bucket_arnplus
-                                          ]
-                                      }
-                      PolicyDict["Statement"].append(newStatement)
-                      newPolicy = json.dumps(PolicyDict, indent=2)
-                      #print(newPolicy)
-                      return {"status": 0,"newpolicy": newPolicy}
-                    else:
-                      return {"status": 1,"newpolicy": ""}
-                InputPayload:
-                  policy: '{{addRoleToBucketGetPolicy.policy}}'
-                  Region: '{{Region}}'
-                  Role: '{{Role}}'
-                  Bucket: '{{Bucket}}'
-                  lcName: '{{lcName}}'
-              outputs:
-                - Selector: $.Payload.newpolicy
-                  Type: String
-                  Name: newPolicy
-                - Name: status
-                  Selector: $.Payload.status
-                  Type: Integer
-            - name: policyCheck
-              action: 'aws:branch'
-              inputs:
-                Choices:
-                  - NextStep: addRolePutNewPolicy
-                    Variable: '{{addRoleGenNewPolicy.status}}'
-                    NumericEquals: 0
-                  - NextStep: updateGovConfig
-                    Variable: '{{addRoleGenNewPolicy.status}}'
-                    NumericEquals: 1
-            - name: addRolePutNewPolicy
-              action: 'aws:executeAwsApi'
-              inputs:
-                Service: s3
-                Api: PutBucketPolicy
-                Bucket: '{{Bucket}}'
-                Policy: '{{addRoleGenNewPolicy.newPolicy}}'
-              outputs:
-                - Name: status
-                  Selector: $
-                  Type: StringMap
-              isCritical: false
-            - name: updateGovConfig
-              action: 'aws:executeScript'
-              inputs:
+                Script: "import json\nimport boto3\n\ndef script_handler(events, context):\n\tdef OpenJsonFile(bucket,file):\n\t    # Opening JSON file\n\t    \n\t    #print(Bucket,Key,value)\n\t    s3 = boto3.client('s3')\n\t    response = s3.get_object(Bucket = bucket, Key = file)\n\t    content = response['Body']\n\t    data = json.loads(content.read().decode('utf-8'))\n\t    #try:\n\t    #    f = open(file)\n\t    #except:\n\t    #    print(\"Could not open file:\",file)\n\t    #    exit()\n\t    #    return False\n\t    # returns JSON object as \n\t    #f.close()\n\t    # a dictionary\n\t    #with open(file, 'r') as f:\n\t    #    data = json.load(f)\n\t    # Closing file\n\t    #f.close()\n\t    return data\n\tdef CheckMode(new_region,new_type,data):\n\n\t\t#print(data)\n\t\tfor x in data[\"regions\"]:\n\t\t\t#print(x)\n\t\t\tfor y in x.keys():\n\t\t\t\tif new_region in x[y][\"awsRegions\"]:\n\t\t\t\t\t#print(x[y][\"awsRegions\"])\n\t\t\t\t\t#print(f\"{new_region} is in {y}\")\n\t\t\t\t\tif new_type in x[y][\"Types\"]:\n\t\t\t\t\t\t#print(z[new_type])\n\t\t\t\t\t\treturn True\n\t\treturn False\n\n\tdef CheckRegion(new_region,new_bucket,new_type,data):\n\n\t\tif new_region in data:\n\t\t\tfor g in data[new_region][\"buckets\"]:\n\t\t\t\tif new_bucket in g.keys():\n\t\t\t\t\tif new_type == g[new_bucket][\"type\"]:\n\t\t\t\t\t\t#print(g[new_bucket])\n\t\t\t\t\t\treturn 0\n\t\t\t\t\telse:\n\t\t\t\t\t\treturn \"fail\"\n\t\t\t\treturn 1\n\t\treturn 2\n\n\tdef CheckLC(new_bucket,new_prefix,new_name,retention,preAge,data):\n\t\tfor u in data[\"LC\"]:\n\t\t\tif new_bucket == u[\"bucket\"]:\n\t\t\t\tfor j in u[\"jobs\"]:\n\t\t\t\t\tif new_name == j[\"name\"] or new_prefix == j[\"prefix\"]:\n\t\t\t\t\t\treturn {\"status\": \"Error.LC\", \"item\":{}}\n\t\t\n\t\titem = {\"name\": new_name,\"description\":\"default\",\"prefix\": new_prefix,\"retention\": retention,\"preAge\": preAge,\"minFileSize\": 1}\n\t\treturn {\"status\": \"add\",\"item\": item}\n\n\n\t#new_region = \"us-east-1\"\n\tnew_region = events[\"Region\"]\n\t#new_type = \"Type2\"\n\tnew_type = events[\"GoveranceRule\"]\n\t#new_bucket = \"4186-lc-virginia1\"\n\tnew_bucket = events[\"Bucket\"]\n\tsourceBucket = events[\"DocumentBucket\"]\n\tGovRuleDoc = events[\"GovRuleDoc\"]\n\tGovCfgDoc = events[\"GovCfgDoc\"]\n\tS3LCCfgDoc = events[\"S3LCCfgDoc\"]\n\t#new_role = \"arn:aws:iam::967258374186:role/4186-s3-lc-assume-role\"\n\tnew_role = events[\"Role\"]\n\t#new_prefix = \"prefix/\"\n\tnew_prefix = events[\"Prefix\"]\n\tnew_name = events[\"lcName\"]\n\tpreAge = events[\"preAge\"]\n\tdataMode = OpenJsonFile(sourceBucket,GovRuleDoc)\n\tdataRegion = OpenJsonFile(sourceBucket,GovCfgDoc)\n\tdataLC = OpenJsonFile(sourceBucket,S3LCCfgDoc)\n\n\tif(CheckMode(new_region,new_type,dataMode)):\n\t\trtn = CheckRegion(new_region,new_bucket,new_type,dataRegion)\n\t\tif not rtn == \"fail\":\n\t\t\tretention = dataMode[\"types\"][new_type][\"minRetention\"]\n\t\t\tif rtn == 1:\n\t\t\t\t#print(f\"can add new bucket {new_bucket}\")\n\n\t\t\t\titem = {new_bucket: {\"IAMrole\": new_role,\"type\": new_type}}\n\t\t\t\trtn2 = CheckLC(new_bucket,new_prefix,new_name,retention,preAge,dataLC)\n\t\t\t\tif rtn2[\"status\"] == \"add\":\n\t\t\t\t\titem2 = rtn2[\"item\"]\n\t\t\t\t\treturn {\"status\": \"add\", \"type\": \"bucket\", \"govCfgAdd\": item, \"LCAdd\": item2}\n\t\t\t\telse:\n\t\t\t\t\treturn {\"status\": \"Error.LC\", \"type\": \"\", \"govCfgAdd\": {}, \"LCAdd\": {}}\n\t\t\t\t#dataRegion[new_region][\"buckets\"].append(item)\n\t\t\t\t#json_object = json.dumps(new_file, indent = 4) \n\t\t\telif rtn == 0:\n\t\t\t\trtn2 = CheckLC(new_bucket,new_prefix,new_name,retention,preAge,dataLC)\n\t\t\t\tif rtn2[\"status\"] == \"add\":\n\t\t\t\t\titem2 = rtn2[\"item\"]\n\t\t\t\t\treturn {\"status\": \"add\", \"type\": \"prefix\", \"govCfgAdd\": {}, \"LCAdd\": item2}\n\t\t\t\telse:\n\t\t\t\t\treturn {\"status\": \"Error.LC\", \"type\": \"\", \"govCfgAdd\": {}, \"LCAdd\": {}}\n\t\t\telif rtn == 2:\n\t\t\t\titem = { \"buckets\": [ {new_bucket: {\"IAMrole\": new_role,\"type\": new_type}}]}\n\t\t\t\trtn2 = CheckLC(new_bucket,new_prefix,new_name,retention,preAge,dataLC)\n\t\t\t\tif rtn2[\"status\"] == \"add\":\n\t\t\t\t\titem2 = rtn2[\"item\"]\n\t\t\t\t\treturn {\"status\": \"add\", \"type\": \"region\", \"govCfgAdd\": item, \"LCAdd\": item2}\n\t\t\t\telse:\n\t\t\t\t\treturn {\"status\": \"Error.LC\", \"type\": \"\", \"govCfgAdd\": {}, \"LCAdd\": {}}\n\t\telse:\n\t\t\treturn {\"status\": \"Error.Config\", \"type\": \"\", \"govCfgAdd\": {}, \"LCAdd\": {}}\n\treturn {\"status\": \"Error.Rule\", \"type\": \"\", \"govCfgAdd\": {}, \"LCAdd\": {}}"
                 Runtime: python3.8
-                Handler: script_handler
-                Script: "import json\nimport boto3\ndef OpenJsonFile(bucket,file):\n    # Opening JSON file\n    \n    #print(Bucket,Key,value)\n    s3 = boto3.client('s3')\n    response = s3.get_object(Bucket = bucket, Key = file)\n    content = response['Body']\n    data = json.loads(content.read().decode('utf-8'))\n    return data\n\n\t\t\ndef WriteJsonFile(bucket,file,data):\n    s3b = boto3.resource('s3')\n    dataStr = json.dumps(data, indent = 2) \n    dataStringB = dataStr.encode('ascii')\n    object = s3b.Object(bucket, file)\n    try:\n      result = object.put(Body=dataStringB)\n      return True\n    except:\n      #failed to uplaod object\n      return False\n\ndef script_handler(events, context):\n    region = events[\"Region\"]\n    bucket = events[\"Bucket\"]\n    sourceBucket = events[\"DocumentBucket\"]\n    GovCfgDoc = events[\"GovCfgDoc\"]\n    S3LCCfgDoc = events[\"S3LCCfgDoc\"]\n    #new_role = \"arn:aws:iam::967258374186:role/4186-s3-lc-assume-role\"\n    role = events[\"Role\"]\n    #new_prefix = \"prefix/\"\n    new_cfg = events[\"cfg\"]\n    lc = events[\"lc\"]\n    type = events[\"type\"]\n    #dataMode = OpenJsonFile(sourceBucket,GovRuleDoc)\n    dataRegion = OpenJsonFile(sourceBucket,GovCfgDoc)\n    dataLC = OpenJsonFile(sourceBucket,S3LCCfgDoc)\n    if type == \"region\":\n        dataRegion[region] = new_cfg\n        item = {\"bucket\":bucket,\"RuleID\": type,\"IAMrole\":role,\"jobs\":[lc]}\n        dataLC[\"LC\"].append(item)\n        chk1 = WriteJsonFile(sourceBucket,GovCfgDoc,dataRegion)\n        if not chk1:\n          return {\"status\": \"Error.UploadCFG\"}\n        chk2 = WriteJsonFile(sourceBucket,S3LCCfgDoc,dataLC)\n        if not chk2:\n          return {\"status\": \"Error.UploadLC\"}\n        return {\"status\": \"AddCFGandLC\"}\n    elif type == \"bucket\":\n        dataRegion[region][\"buckets\"].append(new_cfg)\n        item = {\"bucket\":bucket,\"RuleID\": type,\"IAMrole\":role,\"jobs\":[lc]}\n        dataLC[\"LC\"].append(item)\n        chk1 = WriteJsonFile(sourceBucket,GovCfgDoc,dataRegion)\n        if not chk1:\n          return {\"status\": \"Error.UploadCFG\"}\n        chk2 = WriteJsonFile(sourceBucket,S3LCCfgDoc,dataLC)\n        if not chk2:\n          return {\"status\": \"Error.UploadLC\"}\n        return {\"status\": \"AddCFGandLC\"}\n    else:\n      f = 0\n      for b in dataLC[\"LC\"]:\n        if b[\"bucket\"] == bucket:\n          dataLC[\"LC\"][f][\"jobs\"].append(lc)\n          chk2 = WriteJsonFile(sourceBucket,S3LCCfgDoc,dataLC)\n          if not chk2:\n            return {\"status\": \"Error.UploadLC\"}\n          return {\"status\": \"AddLC\"}\n        f = f + 1\n    return {\"status\": \"Error\"}"
                 InputPayload:
-                  DocumentBucket: '{{DocumentBucket}}'
-                  GoveranceRule: '{{GoveranceRule}}'
+                  Role: '{{Role}}'
+                  lcName: '{{lcName}}'
+                  GovRuleDoc: '{{GovRuleDoc}}'
                   Bucket: '{{Bucket}}'
-                  Region: '{{Region}}'
+                  S3LCCfgDoc: '{{S3LCCfgDoc}}'
+                  GoveranceRule: '{{GoveranceRule}}'
+                  preAge: '{{preAge}}'
+                  Region: '{{cmpRegion.Region}}'
+                  Prefix: '{{Prefix}}'
+                  GovCfgDoc: '{{GovCfgDoc}}'
+                  DocumentBucket: '{{DocumentBucket}}'
+                Handler: script_handler
+              name: GetGovRuleData
+              action: 'aws:executeScript'
+            - outputs:
+                - Type: String
+                  Name: status
+                  Selector: $.Payload.status
+              inputs:
+                Script: "import json\nimport boto3\ndef OpenJsonFile(bucket,file):\n    # Opening JSON file\n    \n    #print(Bucket,Key,value)\n    s3 = boto3.client('s3')\n    response = s3.get_object(Bucket = bucket, Key = file)\n    content = response['Body']\n    data = json.loads(content.read().decode('utf-8'))\n    return data\n\n\t\t\ndef WriteJsonFile(bucket,file,data):\n    s3b = boto3.resource('s3')\n    dataStr = json.dumps(data, indent = 2) \n    dataStringB = dataStr.encode('ascii')\n    object = s3b.Object(bucket, file)\n    try:\n      result = object.put(Body=dataStringB)\n      return True\n    except:\n      #failed to uplaod object\n      return False\n\ndef script_handler(events, context):\n    region = events[\"Region\"]\n    bucket = events[\"Bucket\"]\n    sourceBucket = events[\"DocumentBucket\"]\n    GovCfgDoc = events[\"GovCfgDoc\"]\n    S3LCCfgDoc = events[\"S3LCCfgDoc\"]\n    #new_role = \"arn:aws:iam::967258374186:role/4186-s3-lc-assume-role\"\n    role = events[\"Role\"]\n    #new_prefix = \"prefix/\"\n    new_cfg = events[\"cfg\"]\n    lc = events[\"lc\"]\n    type = events[\"type\"]\n    #dataMode = OpenJsonFile(sourceBucket,GovRuleDoc)\n    dataRegion = OpenJsonFile(sourceBucket,GovCfgDoc)\n    dataLC = OpenJsonFile(sourceBucket,S3LCCfgDoc)\n    if type == \"region\":\n        dataRegion[region] = new_cfg\n        item = {\"bucket\":bucket,\"RuleID\": type,\"IAMrole\":role,\"jobs\":[lc]}\n        dataLC[\"LC\"].append(item)\n        chk1 = WriteJsonFile(sourceBucket,GovCfgDoc,dataRegion)\n        if not chk1:\n          return {\"status\": \"Error.UploadCFG\"}\n        chk2 = WriteJsonFile(sourceBucket,S3LCCfgDoc,dataLC)\n        if not chk2:\n          return {\"status\": \"Error.UploadLC\"}\n        return {\"status\": \"AddCFGandLC\"}\n    elif type == \"bucket\":\n        dataRegion[region][\"buckets\"].append(new_cfg)\n        item = {\"bucket\":bucket,\"RuleID\": type,\"IAMrole\":role,\"jobs\":[lc]}\n        dataLC[\"LC\"].append(item)\n        chk1 = WriteJsonFile(sourceBucket,GovCfgDoc,dataRegion)\n        if not chk1:\n          return {\"status\": \"Error.UploadCFG\"}\n        chk2 = WriteJsonFile(sourceBucket,S3LCCfgDoc,dataLC)\n        if not chk2:\n          return {\"status\": \"Error.UploadLC\"}\n        return {\"status\": \"AddCFGandLC\"}\n    else:\n      f = 0\n      for b in dataLC[\"LC\"]:\n        if b[\"bucket\"] == bucket:\n          dataLC[\"LC\"][f][\"jobs\"].append(lc)\n          chk2 = WriteJsonFile(sourceBucket,S3LCCfgDoc,dataLC)\n          if not chk2:\n            return {\"status\": \"Error.UploadLC\"}\n          return {\"status\": \"AddLC\"}\n        f = f + 1\n    return {\"status\": \"Error\"}"
+                Runtime: python3.8
+                InputPayload:
+                  lcName: '{{lcName}}'
+                  S3LCCfgDoc: '{{S3LCCfgDoc}}'
+                  cfg: '{{GetGovRuleData.govCfgAdd}}'
+                  GoveranceRule: '{{GoveranceRule}}'
+                  preAge: '{{preAge}}'
+                  Prefix: '{{Prefix}}'
+                  type: '{{GetGovRuleData.type}}'
+                  DocumentBucket: '{{DocumentBucket}}'
                   Role: '{{Role}}'
                   GovRuleDoc: '{{GovRuleDoc}}'
-                  GovCfgDoc: '{{GovCfgDoc}}'
-                  S3LCCfgDoc: '{{S3LCCfgDoc}}'
-                  Prefix: '{{Prefix}}'
-                  lcName: '{{lcName}}'
-                  preAge: '{{preAge}}'
-                  type: '{{GetGovRuleData.type}}'
-                  cfg: '{{GetGovRuleData.govCfgAdd}}'
+                  Bucket: '{{Bucket}}'
                   lc: '{{GetGovRuleData.LCAdd}}'
-              outputs:
-                - Name: status
-                  Selector: $.Payload.status
-                  Type: String
-              isEnd: false
-            - name: addLCRule
-              action: 'aws:executeScript'
-              inputs:
-                Runtime: python3.8
+                  Region: '{{cmpRegion.Region}}'
+                  GovCfgDoc: '{{GovCfgDoc}}'
                 Handler: script_handler
+              name: updateGovConfig
+              action: 'aws:executeScript'
+              isEnd: false
+            - outputs:
+                - Type: String
+                  Name: status
+                  Selector: $.Payload.status
+              inputs:
                 Script: |-
                   import json
                   import boto3
@@ -486,52 +348,48 @@ Resources:
                           print(e.response['Error']['Code']) 
                           return {"status": e.response['Error']['Code']}
                       return {"status": "0"}
+                Runtime: python3.8
                 InputPayload:
-                  rules: '{{PullLCData.rules}}'
-                  Bucket: '{{Bucket}}'
-                  LCAdd: '{{GetGovRuleData.LCAdd}}'
-                  preAge: '{{preAge}}'
                   lcName: '{{lcName}}'
+                  LCAdd: '{{GetGovRuleData.LCAdd}}'
+                  Bucket: '{{Bucket}}'
+                  preAge: '{{preAge}}'
+                  rules: '{{PullLCData.rules}}'
                   Prefix: '{{Prefix}}'
-              outputs:
-                - Name: status
-                  Selector: $.Payload.status
-                  Type: String
-              isEnd: true
-            - name: failure
-              action: 'aws:executeScript'
-              inputs:
-                Runtime: python3.7
                 Handler: script_handler
+              name: addLCRule
+              action: 'aws:executeScript'
+              isEnd: true
+            - inputs:
                 Script: |-
                   def script_handler(events, context):
                     print('hello world')
                     # print(events["parameter"])
                     return {'message': 'Hello'}
+                Runtime: python3.7
                 InputPayload:
                   Bucket: '{{Bucket}}'
-              isEnd: true
-            - name: updateMode
-              action: 'aws:executeScript'
-              inputs:
-                Runtime: python3.7
                 Handler: script_handler
+              name: failure
+              action: 'aws:executeScript'
+              isEnd: true
+            - outputs:
+                - Type: String
+                  Name: status
+                  Selector: $.Payload.status
+              inputs:
                 Script: "import json\nimport boto3\nfrom botocore.exceptions import ClientError\nfrom datetime import datetime, date\n\ndef script_handler(events, context):\n\tdef OpenJsonFile(bucket,file):\n\t    # Opening JSON file\n\t    \n\t    #print(Bucket,Key,value)\n\t    s3 = boto3.client('s3')\n\t    response = s3.get_object(Bucket = bucket, Key = file)\n\t    content = response['Body']\n\t    data = json.loads(content.read().decode('utf-8'))\n\t    return data\n\t    \n\tdef WriteJsonFile(bucket,file,data):\n\t    s3b = boto3.resource('s3')\n\t    dataStr = json.dumps(data, indent = 2) \n\t    dataStringB = dataStr.encode('ascii')\n\t    object = s3b.Object(bucket, file)\n\t    try:\n\t      result = object.put(Body=dataStringB)\n\t      return True\n\t    except:\n\t      #failed to uplaod object\n\t      return False\n\t      \n\tdef PullLCData(bucket):\n\t\ts3client = boto3.client('s3')\n\t\ttry:\n\t\t    response = s3client.get_bucket_lifecycle_configuration(Bucket=bucket)\n\t\texcept ClientError as e:\n\t\t\treturn {\"status\": e.response['Error']['Code'], \"LC\": []}\n\t\treturn {\"status\": \"good\", \"LC\": response[\"Rules\"]}\n     \n\tdef UpdateLC(bucket,update):\n\t\ts3client = boto3.client('s3')\n\t\trulesDict = PullLCData(bucket)\n\t\tif not rulesDict[\"status\"] == \"good\":\n\t\t\treturn {\"status\": rtn[\"status\"]}\n\t\tRules = rulesDict[\"LC\"]\n\t\tprint(Rules)\n\t\tif rulesDict[\"status\"] == \"good\":\n\t\t\tprefix = \"\"\n\t\t\tjob = \"\"\n\t\t\tpreAge = -1\n\t\t\tretention = 0\n\t\t\tfor u in update:\n\t\t\t\tfor job in u.keys():\n\t\t\t\t\tpreAge = int(u[job][\"preAge\"])\n\t\t\t\t\tretention = int(u[job][\"retention\"])\n\t\t\t\tif preAge == -1 or job == \"\" or retention == 0:\n\t\t\t\t  return {\"status\": \"Error.baddata\"}\n\t\t\t\tx = 0\n\t\t\t\tfor rule in Rules:\n\t\t\t\t\tif rule[\"ID\"] == job:\n  \t\t\t\t\t\tcheckAge = preAge + 1\n  \t\t\t\t\t\t#print(job)\n  \t\t\t\t\t\tif retention < checkAge:\n  \t\t\t\t\t\t\tage = 1\n  \t\t\t\t\t\telse:\n  \t\t\t\t\t\t\tage = retention - preAge\n  \t\t\t\t\t\t#print(age,Rules[x])\n  \t\t\t\t\t\tRules[x][\"Expiration\"][\"Days\"] = age\n  \t\t\t\t\t\tRules[x][\"NoncurrentVersionExpiration\"][\"NoncurrentDays\"] = age\n  \t\t\t\t\t\ty = 0\n  \t\t\t\t\t\tfor v in dataLC[\"LC\"]:\n  \t\t\t\t\t\t\tif v[\"bucket\"] == bucket:\n  \t\t\t\t\t\t\t\tw = 0\t\t\n  \t\t\t\t\t\t\t\tfor j in v[\"jobs\"]:\n  \t\t\t\t\t\t\t\t\tif j in v[\"jobs\"]:\n  \t\t\t\t\t\t\t\t\t\t#print(bucket,j,y,w)\n  \t\t\t\t\t\t\t\t\t\t#print(dataLC)\n  \t\t\t\t\t\t\t\t\t\tdataLC[\"LC\"][y][\"jobs\"][w][\"retention\"] = retention\n  \t\t\t\t\t\t\t\t\tw = w + 1\n  \t\t\t\t\t\t\ty = y + 1\n\t\t\t\t\tx = x + 1\n\t\tbase = {'Rules': Rules}\n\t\ttry:\n\t\t\tresponse = s3client.put_bucket_lifecycle_configuration(\n\t\t\t    Bucket=bucket,\n\t\t\t    LifecycleConfiguration=base)\n\t\texcept ClientError as e:\n\t\t    #print(e.response['Error']['Code']) \n\t\t    return {\"status\": e.response['Error']['Code']}\n\t\treturn {\"status\": \"0\"}\n\n\n\n\tsourceBucket = events[\"DocumentBucket\"]\n\tGovRuleDoc = events[\"GovRuleDoc\"]\n\tGovCfgDoc = events[\"GovCfgDoc\"]\n\tS3LCCfgDoc = events[\"S3LCCfgDoc\"]\n\n\tdataMode = OpenJsonFile(sourceBucket,GovRuleDoc)\n\tdataRegion = OpenJsonFile(sourceBucket,GovCfgDoc)\n\tdataLC = OpenJsonFile(sourceBucket,S3LCCfgDoc)\n\n\ttypes = dataMode[\"types\"]\n\tupdates = []\n\tret = 0\n\tfor bc in dataLC[\"LC\"]:\n\t\t#print(bc)\n\t\tbuck = bc[\"bucket\"]\n\t\tfor regid in dataRegion.keys():\n\t\t\t#print(regid)\n\t\t\tfor b in dataRegion[regid][\"buckets\"]:\n\t\t\t\t#print(b)\n\t\t\t\tfor bid in b.keys():\n\t\t\t\t\t#print(bid)\n\t\t\t\t\tif buck == bid :\n\t\t\t\t\t\tt = b[bid][\"type\"]\n\t\t\t\t\t\tret = types[t][\"minRetention\"]\n\t\tif ret == 0:\n\t\t\treturn {\"status\": \"Error.docsync\"}\n\t\tfor jobs in bc[\"jobs\"]:\n\t\t  #print(ret,jobs[\"retention\"])\n\t\t  if not jobs[\"retention\"] == ret:\n\t\t    item = {\"bucket\": buck, \"job\": jobs[\"name\"], \"retention\": ret, \"preAge\": jobs[\"preAge\"]}\n\t\t    updates.append(item)\n\tif len(updates) > 0:\n\t\tsets = {}\n\t\tfor up in updates:\n\t\t\titem2 = {up[\"job\"]: {\"preAge\": up[\"preAge\"], \"retention\": up[\"retention\"]}}\n\t\t\tif up[\"bucket\"] in sets.keys():\n\t\t\t\tsets[up[\"bucket\"]].append(item2)\n\t\t\t\t#print(\"add to existing entry\")\n\t\t\telse:\n\t\t\t\tsets[up[\"bucket\"]] = [item2]\n\t\t\t\t#print(\"create new entry\")\n\t\tprint(sets)\n\t\tfor set in sets.keys():\n\t\t\trtn = UpdateLC(set,sets[set])\n\t\t\t#if rtn[\"status\"] == '0':\n\t\t\t\t#print(\"what up\")\n\t\t\t#\treturn {\"status\": \"Error.updateLC\"}\n\t\t  #return {\"status\": rtn[\"status\"]} \n\t\t\n\t\tchk2 = WriteJsonFile(sourceBucket,S3LCCfgDoc,dataLC)\n\t\tif not chk2:\n\t\t\treturn {\"status\": \"Error.UploadLC\"}\n\t\ttoday = date.today().strftime(\"%Y.%m.%d\")\n\t\tfileE = \"lc-config/S3LCEvalUpdate\" + today + \".json\"\n\t\tupdateVal = {\"date\": today, \"Update\": updates}\n\t\tchk3 = WriteJsonFile(sourceBucket,fileE,updateVal)\n\t\tif not chk3:\n\t\t\treturn {\"status\": \"Error.CreateEvalFile\"}\n\t\tStatusMsg = f\"Updated {len(updates)} LC policies in {len(sets.keys())} buckets\"\n\t\treturn {\"status\": StatusMsg}\n\telse:\n\t\treturn {\"status\": \"No LC polices needed to be updated\"}"
+                Runtime: python3.7
                 InputPayload:
-                  S3LCCfgDoc: '{{S3LCCfgDoc}}'
                   GovRuleDoc: '{{GovRuleDoc}}'
+                  S3LCCfgDoc: '{{S3LCCfgDoc}}'
                   GovCfgDoc: '{{GovCfgDoc}}'
                   DocumentBucket: '{{DocumentBucket}}'
-              outputs:
-                - Name: status
-                  Selector: $.Payload.status
-                  Type: String
-              isEnd: true
-            - name: initializeFiles
-              action: 'aws:executeScript'
-              inputs:
-                Runtime: python3.7
                 Handler: script_handler
+              name: updateMode
+              action: 'aws:executeScript'
+              isEnd: true
+            - inputs:
                 Script: |-
                   import json
                   import boto3
@@ -626,8 +484,12 @@ Resources:
                       if not ck3:
                         return {"status": "Error.WriteLC"}
                       return {"status": "initialized"}
+                Runtime: python3.7
                 InputPayload:
-                  DocumentBucket: '{{DocumentBucket}}'
-                  S3LCCfgDoc: '{{S3LCCfgDoc}}'
                   GovRuleDoc: '{{GovRuleDoc}}'
+                  S3LCCfgDoc: '{{S3LCCfgDoc}}'
                   GovCfgDoc: '{{GovCfgDoc}}'
+                  DocumentBucket: '{{DocumentBucket}}'
+                Handler: script_handler
+              name: initializeFiles
+              action: 'aws:executeScript'
